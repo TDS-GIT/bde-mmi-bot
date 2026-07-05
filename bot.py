@@ -61,10 +61,11 @@ class MyBot(commands.Bot):
         self.add_view(VerificationView())
         self.add_view(VerificationCodeView(user_id=0))
         self.add_view(MMIMenu())
-        self.add_view(ClassSelectView("mmi1"))
+        self.add_view(ClassSelectView("mmi1", ROLE_MMI1_CLASSES))
         self.add_view(SpeSelectView("mmi2"))
         self.add_view(SpeSelectView("mmi3"))
         self.add_view(AncienSpeView())
+        self.add_view(SummerMMIView())
         self.add_view(TicketMenuView())
         self.add_view(DemandeMenuView())
 
@@ -252,12 +253,12 @@ class ReglementView(View):
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
-# ███████╗███████╗████████╗██╗   ██╗██████╗     ███████╗████████╗██╗   ██╗
-# ██╔════╝██╔════╝╚══██╔══╝██║   ██║██╔══██╗    ██╔════╝╚══██╔══╝██║   ██║
-# ███████╗█████╗     ██║   ██║   ██║██████╔╝    █████╗     ██║   ██║   ██║
-# ╚════██║██╔══╝     ██║   ██║   ██║██╔═══╝     ██╔══╝     ██║   ██║   ██║
-# ███████║███████╗   ██║   ╚██████╔╝██║         ███████╗   ██║   ╚██████╔╝
-# ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝         ╚══════╝   ╚═╝    ╚═════╝ 
+# ███████╗███████╗████████╗██╗   ██╗██████╗     ██████╗ ███████╗ ██████╗ ██╗     ███████╗
+# ██╔════╝██╔════╝╚══██╔══╝██║   ██║██╔══██╗    ██╔══██╗██╔════╝██╔════╝ ██║     ██╔════╝
+# ███████╗█████╗     ██║   ██║   ██║██████╔╝    ██████╔╝█████╗  ██║  ███╗██║     █████╗  
+# ╚════██║██╔══╝     ██║   ██║   ██║██╔═══╝     ██╔══██╗██╔══╝  ██║   ██║██║     ██╔══╝  
+# ███████║███████╗   ██║   ╚██████╔╝██║         ██║  ██║███████╗╚██████╔╝███████╗███████╗
+# ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝         ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚══════╝╚══════╝
 # ══════════════════════════════════════════════════════════════════════════════════════
 #
 # FONCTIONNALITÉ 2 : VÉRIFICATION ÉTUDIANTE (RÔLE ÉTUDIANT)
@@ -496,7 +497,7 @@ ROLE_MMI1_CLASSES = [
     (1459151199575216235, "MMI1 D")
 ]
 
-# Rôles MMI2 : Classes (NON UTILISÉES ACTUELLEMENT - CONSERVÉES POUR PLUS TARD)
+# Rôles MMI2 : Classes (ACTUELLEMENT UTILISÉES - UTILISÉES DE SEPTEMBRE À FÉVRIER)
 ROLE_MMI2_CLASSES = [
     (1459156766204891253, "MMI2 A1"),
     (1459156833506820199, "MMI2 A2"),
@@ -505,7 +506,7 @@ ROLE_MMI2_CLASSES = [
     (1459157008522674320, "MMI2 C")
 ]
 
-# Rôles MMI2 : Spécialités (ACTUELLEMENT UTILISÉES)
+# Rôles MMI2 : Spécialités (NON UTILISÉES ACTUELLEMENT - UTILISÉES DE MARS À JUIN)
 # Nouvelles appellations : Stratégie, Création, Développement Web
 ROLE_MMI2_SPES = [
     (1459159992849662125, "MMI2 - STRAT1"),
@@ -516,16 +517,17 @@ ROLE_MMI2_SPES = [
 ]
 
 # Rôles MMI3 : Spécialités uniquement
-# Anciennes appellations : COM, MUL, WEB
+# Nouvelles appellations : Stratégie, Création, Développement Web
 ROLE_MMI3_SPES = [
-    (1459157221110841427, "MMI3 - COM1"),
-    (1459157304061726843, "MMI3 - COM2"),
-    (1459157361615962268, "MMI3 - MUL1"),
-    (1459157446621794334, "MMI3 - MUL2"),
-    (1459157500262613093, "MMI3 - WEB")
+    (1459157221110841427, "MMI3 - STRAT1"),
+    (1459157304061726843, "MMI3 - STRAT2"),
+    (1459157361615962268, "MMI3 - CREA1"),
+    (1459157446621794334, "MMI3 - CREA2"),
+    (1459157500262613093, "MMI3 - DWEB")
 ]
 
 # Rôles Anciens : Spécialités de fin d'études
+# Anciennes appellations : COM, MUL, WEB
 ROLE_ANCIEN_SPES = [
     (1459772225937998001, "COM"),
     (1459772322029375646, "MUL"),
@@ -607,19 +609,18 @@ class PromoSelect(Select):
         elif promo == ROLE_PROMOS[0][0]:  # MMI1
             await interaction.response.send_message(
                 "✅  Promo sélectionnée. Maintenant choisis ta **classe**.",
-                view=ClassSelectView("mmi1"),
+                view=ClassSelectView("mmi1", ROLE_MMI1_CLASSES),
                 ephemeral=True
             )
         elif promo == ROLE_PROMOS[1][0]:  # MMI2
             await interaction.response.send_message(
                 "✅  Promo sélectionnée. Maintenant choisis ta **classe**.",
-                view=SpeSelectView("mmi2"),
+                view=ClassSelectView("mmi2", ROLE_MMI2_CLASSES),
                 ephemeral=True
             )
         elif promo == ROLE_PROMOS[2][0]:  # MMI3
             await interaction.response.send_message(
-                "✅  Promo sélectionnée. Maintenant choisis ta **classe**.",
-                view=SpeSelectView("mmi3"),
+                "✅  Promo sélectionnée.",
                 ephemeral=True
             )
 
@@ -635,8 +636,8 @@ class MMIMenu(View):
 # ──────────────────────────────────────────────────────────────────────────────────────
 
 class ClassSelect(Select):
-    def __init__(self, promo):
-        roles = ROLE_MMI1_CLASSES
+    def __init__(self, promo, roles):
+        self.roles = roles
         super().__init__(
             placeholder="Choisis ta classe",
             options=[discord.SelectOption(label=n, value=str(i)) for i, n in roles],
@@ -653,8 +654,7 @@ class ClassSelect(Select):
 
         member = interaction.user
 
-        # Supprimer anciennes classes MMI1
-        await remove_roles(member, [r[0] for r in ROLE_MMI1_CLASSES])
+        await remove_roles(member, [r[0] for r in self.roles])
         await member.add_roles(interaction.guild.get_role(int(self.values[0])))
 
         await interaction.response.send_message(
@@ -664,10 +664,10 @@ class ClassSelect(Select):
 
 
 class ClassSelectView(View):
-    """View pour la sélection de classe (MMI1)"""
-    def __init__(self, promo):
+    """View pour la sélection de classe (MMI1 ou MMI2)"""
+    def __init__(self, promo, roles):
         super().__init__(timeout=None)
-        self.add_item(ClassSelect(promo))
+        self.add_item(ClassSelect(promo, roles))
 
 # ──────────────────────────────────────────────────────────────────────────────────────
 # SECTION 5 : SÉLECTION DE LA SPÉCIALITÉ (MMI2, MMI3)
@@ -752,6 +752,88 @@ class AncienSpeView(View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(AncienSpeSelect())
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 7 : COMMANDE VACANCES D'ÉTÉ (SÉLECTION POUR LA RENTRÉE DE SEPTEMBRE)
+# ──────────────────────────────────────────────────────────────────────────────────────
+#
+# Commande indépendante, utilisée uniquement pendant les vacances d'été.
+# Ne modifie ni ne remplace /setup_mmi : c'est un menu séparé, posté à part.
+#
+# Pendant l'été, les étudiants savent déjà dans quelle promotion ils seront à la
+# rentrée de septembre, mais ne connaissent pas encore leur futur groupe TD/TP.
+#
+# Cas par promotion :
+# - MMI1  : rôle de promo uniquement
+# - MMI2  : rôle de promo uniquement
+# - MMI3  : rôle de promo uniquement (pas de spécialité demandée à ce stade)
+# - Ancien : rôle de promo, puis choix de la spécialité de fin d'études
+#            (réutilise AncienSpeView, déjà existant)
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+# Rôles de promos utilisés pour la sélection "rentrée de septembre"
+ROLE_PROMOS_VAC = [
+    (1459145017128914945, "MMI1 (redoublant ou nouveau)"),
+    (1459149695409586341, "MMI2"),
+    (1459149685993373707, "MMI3"),
+    (1459772466129010862, "Ancien")
+]
+
+class SummerPromoSelect(Select):
+    def __init__(self):
+        super().__init__(
+            placeholder="Choisis ta promotion pour la rentrée",
+            options=[discord.SelectOption(label=n, value=str(i)) for i, n in ROLE_PROMOS_VAC],
+            custom_id="promo_vac_select"
+        )
+
+    async def callback(self, interaction):
+        member = interaction.user
+        promo = int(self.values[0])
+
+        # Supprimer toutes les promos, classes et spés existantes
+        await remove_roles(member, [r[0] for r in ROLE_PROMOS])
+        await remove_roles(member,
+            [r[0] for r in ROLE_MMI1_CLASSES]
+            + [r[0] for r in ROLE_MMI2_CLASSES]
+            + [r[0] for r in ROLE_MMI2_SPES]
+            + [r[0] for r in ROLE_MMI3_SPES]
+            + [r[0] for r in ROLE_ANCIEN_SPES]
+        )
+
+        # Attribuer le rôle de promo choisi pour la rentrée
+        await member.add_roles(interaction.guild.get_role(promo))
+
+        if promo == ROLE_PROMOS_VAC[3][0]:  # Ancien
+            await interaction.response.send_message(
+                "Promotion pour la rentrée sélectionnée. Quelle était ta spécialité ?",
+                view=AncienSpeView(),
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "Promotion pour la rentrée sélectionnée.",
+                ephemeral=True
+            )
+
+
+class SummerMMIView(View):
+    """View principale pour la sélection de promo pendant les vacances"""
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(SummerPromoSelect())
+
+
+@bot.tree.command(name="setup_mmi_vac")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_mmi_vac(interaction: discord.Interaction):
+    """Crée le menu de sélection MMI spécifique aux vacances d'été"""
+    channel = bot.get_channel(CHANNEL_MMI_ID)
+    await channel.send(
+        "À la rentrée de septembre, dans quelle promotion seras-tu ?",
+        view=SummerMMIView()
+    )
+    await interaction.response.send_message("Menu MMI vacances créé.", ephemeral=True)
 
 
 
