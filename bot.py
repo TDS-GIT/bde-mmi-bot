@@ -1383,9 +1383,8 @@ async def setup_reseaux(interaction: discord.Interaction):
     embed = discord.Embed(
         title="Tous nos réseaux",
         description=(
-            "Retrouve la Mafia MMI là où on est présents : Instagram, TikTok, "
-            "et le reste de nos réseaux.\n\n"
-            "Un seul lien, tout au même endroit."
+            "Retrouve la Mafia MMI là où on est présents : Discord, Instagram, et le reste de nos réseaux.\n\n"
+            "Un seul lien, mais tout au même endroit."
         ),
         color=discord.Color.gold()
     )
