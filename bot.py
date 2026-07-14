@@ -325,14 +325,26 @@ class VerificationView(View):
     )
     async def start_verif(self, interaction: discord.Interaction, button: Button):
         """Démarre le processus de vérification en DM"""
+        try:
+            await interaction.user.send(
+                "**Vérification Étudiante – Université d'Artois**\n\n"
+                "Merci d'envoyer ton **adresse mail universitaire** :\n"
+                "prenom_nom@ens.univ-artois.fr"
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌  Je n'arrive pas à t'envoyer de message privé.\n\n"
+                "Va dans **Paramètres du serveur** (clic droit sur le nom du serveur en haut à gauche) "
+                "→ **Paramètres de confidentialité** → active **\"Autoriser les messages privés\"**, "
+                "puis reclique sur ce bouton.\n\n"
+                "Tu pourras redésactiver cette option une fois la vérification terminée.",
+                ephemeral=True
+            )
+            return
+
         await interaction.response.send_message(
             "Regarde tes messages privés pour continuer la vérification  📩",
             ephemeral=True
-        )
-        await interaction.user.send(
-            "**Vérification Étudiante – Université d'Artois**\n\n"
-            "Merci d'envoyer ton **adresse mail universitaire** :\n"
-            "prenom_nom@ens.univ-artois.fr"
         )
 
 # ──────────────────────────────────────────────────────────────────────────────────────
