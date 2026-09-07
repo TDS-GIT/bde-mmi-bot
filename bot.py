@@ -18,6 +18,7 @@
 
 import discord
 from discord.ext import commands
+from discord.ext import tasks
 from discord import app_commands
 from discord.ui import View, Button, Select, Modal, TextInput
 import random
@@ -70,6 +71,11 @@ class MyBot(commands.Bot):
         self.add_view(TicketMenuView())
         self.add_view(DemandeMenuView())
         self.add_view(MinecraftRoleView())
+
+        # Démarrage de la tâche planifiée qui vérifie chaque jour si la rotation
+        # annuelle des promos (début juillet) doit être déclenchée
+        if not verifier_rotation_annuelle.is_running():
+            verifier_rotation_annuelle.start()
 
 bot = MyBot()
 
@@ -511,7 +517,7 @@ ROLE_MMI1_CLASSES = [
     (1459151199575216235, "MMI1 D")
 ]
 
-# Rôles MMI2 : Classes (ACTUELLEMENT UTILISÉES - UTILISÉES DE SEPTEMBRE À FÉVRIER)
+# Rôles MMI2 : Classes (groupe TD/TP) - UTILISÉES DE SEPTEMBRE À DÉCEMBRE (S3)
 ROLE_MMI2_CLASSES = [
     (1459156766204891253, "MMI2 A1"),
     (1459156833506820199, "MMI2 A2"),
@@ -520,7 +526,7 @@ ROLE_MMI2_CLASSES = [
     (1459157008522674320, "MMI2 C")
 ]
 
-# Rôles MMI2 : Spécialités (NON UTILISÉES ACTUELLEMENT - UTILISÉES DE MARS À JUIN)
+# Rôles MMI2 : Spécialités - UTILISÉES DE JANVIER À JUIN (S4, après les SAE de début janvier)
 # Nouvelles appellations : Stratégie, Création, Développement Web
 ROLE_MMI2_SPES = [
     (1459159992849662125, "MMI2 - STRAT1"),
@@ -529,6 +535,30 @@ ROLE_MMI2_SPES = [
     (1459242366555914418, "MMI2 - CREA2"),
     (1459160080657289361, "MMI2 - DWEB")
 ]
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# PÉRIODES DE L'ANNÉE POUR LES MMI2 (3ᵉ période, en plus des vacances d'été)
+# ──────────────────────────────────────────────────────────────────────────────────────
+#
+# Les MMI2 sont le seul niveau dont le rôle de groupe change en cours d'année scolaire :
+# - Septembre à décembre (S3) : rôles de CLASSE (ROLE_MMI2_CLASSES)
+# - Janvier à juin (S4)       : rôles de SPÉCIALITÉ (ROLE_MMI2_SPES)
+#
+# MMI1 garde toujours ses classes, MMI3 garde toujours ses spécialités : rien à faire
+# pour eux en cours d'année.
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+# Mois où les MMI2 utilisent leur rôle de CLASSE
+MOIS_MMI2_CLASSES = [9, 10, 11, 12]
+
+# Mois où les MMI2 utilisent leur rôle de SPÉCIALITÉ
+MOIS_MMI2_SPE = [1, 2, 3, 4, 5, 6]
+
+# Nombre de jours, en septembre, considérés comme le "début de la rentrée" : pendant
+# cette fenêtre, le message affiché après le choix de la classe précise que l'on peut
+# laisser le choix en suspens si on ne connaît pas encore sa classe. Passé ce délai
+# (octobre), tout le monde est censé connaître sa classe, donc le message redevient standard.
+JOUR_LIMITE_RENTREE = 14
 
 # Rôles MMI3 : Spécialités uniquement
 # Nouvelles appellations : Stratégie, Création, Développement Web
@@ -541,10 +571,10 @@ ROLE_MMI3_SPES = [
 ]
 
 # Rôles Anciens : Spécialités de fin d'études
-# Anciennes appellations : COM, MUL, WEB
+# Anciennes appellations : COM, CREA, WEB
 ROLE_ANCIEN_SPES = [
     (1459772225937998001, "COM"),
-    (1459772322029375646, "MUL"),
+    (1459772322029375646, "CREA"),
     (1459770233765101800, "WEB")
 ]
 
@@ -608,6 +638,22 @@ async def remove_roles(member, role_ids):
     if roles:
         await member.remove_roles(*roles)
 
+#
+# Fonctions utilitaires : Détection de la période de l'année (pour les MMI2 et la rentrée)
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+def mmi2_utilise_classes():
+    """True de septembre à décembre : les MMI2 choisissent/ont leur classe (groupe TD/TP).
+    False de janvier à juin : les MMI2 choisissent/ont leur spécialité."""
+    return datetime.date.today().month in MOIS_MMI2_CLASSES
+
+
+def en_debut_septembre():
+    """True uniquement pendant les JOUR_LIMITE_RENTREE premiers jours de septembre
+    (période de rentrée où la classe n'est pas encore forcément connue)."""
+    aujourdhui = datetime.date.today()
+    return aujourdhui.month == 9 and aujourdhui.day <= JOUR_LIMITE_RENTREE
+
 # ──────────────────────────────────────────────────────────────────────────────────────
 # SECTION 3 : SÉLECTION DE LA PROMO (Menu principal)
 # ──────────────────────────────────────────────────────────────────────────────────────
@@ -634,6 +680,7 @@ class PromoSelect(Select):
         await remove_roles(member, [r[0] for r in ROLE_PROMOS])
         await remove_roles(member,
             [r[0] for r in ROLE_MMI1_CLASSES]
+            + [r[0] for r in ROLE_MMI2_CLASSES]
             + [r[0] for r in ROLE_MMI2_SPES]
             + [r[0] for r in ROLE_MMI3_SPES]
             + [r[0] for r in ROLE_ANCIEN_SPES]
@@ -650,20 +697,49 @@ class PromoSelect(Select):
                 ephemeral=True
             )
         elif promo == ROLE_PROMOS[0][0]:  # MMI1
+            # MMI1 garde toujours des classes, quelle que soit la période de l'année.
+            if en_debut_septembre():
+                message = (
+                    "✅  C'est la rentrée ! Sélectionne ta nouvelle **classe** "
+                    "(si tu ne la connais pas encore, laisse en suspens et reviens plus tard)."
+                )
+            else:
+                message = "✅  Promo sélectionnée. Maintenant choisis ta **classe**."
+
             await interaction.response.send_message(
-                "✅  Promo sélectionnée. Maintenant choisis ta **classe**.",
+                message,
                 view=ClassSelectView("mmi1", ROLE_MMI1_CLASSES),
                 ephemeral=True
             )
         elif promo == ROLE_PROMOS[1][0]:  # MMI2
-            await interaction.response.send_message(
-                "✅  Promo sélectionnée. Maintenant choisis ta **classe**.",
-                view=ClassSelectView("mmi2", ROLE_MMI2_CLASSES),
-                ephemeral=True
-            )
+            # MMI2 change de groupe en cours d'année : groupe TD/TP de septembre à
+            # décembre, puis groupe de spécialité (STRAT/CREA/DWEB) de janvier à juin.
+            # Les deux sont appelés "classe" côté étudiant, donc le message ne change pas.
+            if mmi2_utilise_classes():
+                vue_mmi2 = ClassSelectView("mmi2", ROLE_MMI2_CLASSES)
+            else:
+                vue_mmi2 = SpeSelectView("mmi2")
+
+            if en_debut_septembre():
+                message = (
+                    "✅  C'est la rentrée ! Sélectionne ta nouvelle **classe** "
+                    "(si tu ne la connais pas encore, laisse en suspens et reviens plus tard)."
+                )
+            else:
+                message = "✅  Promo sélectionnée. Maintenant choisis ta **classe**."
+
+            await interaction.response.send_message(message, view=vue_mmi2, ephemeral=True)
         elif promo == ROLE_PROMOS[2][0]:  # MMI3
+            if en_debut_septembre():
+                message = (
+                    "✅  C'est la rentrée ! Sélectionne ta nouvelle **classe** "
+                    "(si tu ne la connais pas encore, laisse en suspens et reviens plus tard)."
+                )
+            else:
+                message = "✅  Promo sélectionnée. Maintenant choisis ta **classe**."
+
             await interaction.response.send_message(
-                "✅  Promo sélectionnée. Maintenant choisis ta **spécialité**.",
+                message,
                 view=SpeSelectView("mmi3"),
                 ephemeral=True
             )
@@ -701,10 +777,16 @@ class ClassSelect(Select):
         await remove_roles(member, [r[0] for r in self.roles])
         await member.add_roles(interaction.guild.get_role(int(self.values[0])))
 
-        await interaction.response.send_message(
-            "✅  Classe sélectionnée.",
-            ephemeral=True
-        )
+        # Rappel spécifique aux MMI2 : en janvier, la classe laisse place à la spécialité
+        if self.promo == "mmi2" and mmi2_utilise_classes():
+            message = (
+                "✅  Classe sélectionnée. En janvier, lors du passage aux groupes de "
+                "spécialité, reviens sur ce menu pour choisir ta nouvelle classe."
+            )
+        else:
+            message = "✅  Classe sélectionnée."
+
+        await interaction.response.send_message(message, ephemeral=True)
 
 
 class ClassSelectView(View):
@@ -1548,6 +1630,229 @@ class MinecraftRoleView(View):
             "✅  Rôle Minecraft retiré.",
             ephemeral=True
         )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# ██████╗  ██████╗ ████████╗ █████╗ ████████╗██╗ ██████╗ ███╗   ██╗
+# ██╔══██╗██╔═══██╗╚══██╔══╝██╔══██╗╚══██╔══╝██║██╔═══██╗████╗  ██║
+# ██████╔╝██║   ██║   ██║   ███████║   ██║   ██║██║   ██║██╔██╗ ██║
+# ██╔══██╗██║   ██║   ██║   ██╔══██║   ██║   ██║██║   ██║██║╚██╗██║
+# ██║  ██║╚██████╔╝   ██║   ██║  ██║   ██║   ██║╚██████╔╝██║ ╚████║
+# ╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚═╝  ╚═╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# FONCTIONNALITÉ 8 : ROTATION ANNUELLE AUTOMATIQUE DES PROMOS (DÉBUT JUILLET)
+#
+# Principe de fonctionnement :
+# 1. Une tâche planifiée tourne en arrière-plan et se réveille une fois par jour
+# 2. Si on est dans les premiers jours de juillet ET que la rotation n'a pas encore
+#    été faite cette année-là, elle se déclenche automatiquement
+# 3. Pour chaque membre du serveur :
+#    - Tous les rôles de classe/spécialité (MMI1, MMI2, MMI3) sont retirés
+#    - MMI1 → MMI2, MMI2 → MMI3, MMI3 → Ancien (les Anciens ne bougent plus, ils
+#      gardent leur spécialité de fin d'études)
+# 4. Tous les salons de classe (promo/TD/TP) listés dans CHANNELS_A_VIDER sont vidés
+# 5. L'année de la dernière exécution est mémorisée en mémoire (aucun fichier, aucune
+#    variable d'environnement) pour éviter de rejouer tout ça deux fois la même année.
+#    Cette mémoire est remise à zéro à chaque redémarrage du bot : si le bot redémarre
+#    PILE dans les JOUR_LIMITE_ROTATION premiers jours de juillet après avoir déjà
+#    tourné cette année-là, la rotation pourrait se redéclencher. Risque volontairement
+#    accepté pour ne pas complexifier avec un fichier ou le .env.
+#
+# Un membre qui a redoublé (ou qui s'est trompé) peut corriger sa situation lui-même,
+# à tout moment, simplement en resélectionnant sa vraie promo via /setup_mmi : la
+# suppression des rôles conflictuels est déjà gérée par PromoSelect.callback.
+#
+# ══════════════════════════════════════════════════════════════════════════════════════
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 0 : CONFIGURATION
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+# Nombre de jours, en juillet, pendant lesquels la tâche planifiée est autorisée à
+# déclencher la rotation si elle ne l'a pas encore fait cette année (sert de filet de
+# sécurité si le bot était éteint le 1er juillet)
+JOUR_LIMITE_ROTATION = 5
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 1 : SAUVEGARDE DE L'ÉTAT (ÉVITER LES DOUBLONS)
+# ──────────────────────────────────────────────────────────────────────────────────────
+#
+# Mémorisation en mémoire uniquement (pas de fichier ni de .env) : l'année de la
+# dernière rotation est remise à zéro à chaque redémarrage du bot. Le seul risque est
+# que la rotation se redéclenche si le bot redémarre PILE pendant les JOUR_LIMITE_ROTATION
+# premiers jours de juillet après avoir déjà tourné cette année-là. Risque jugé
+# suffisamment faible pour éviter la complexité d'un fichier ou d'une variable d'env.
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+_derniere_rotation_annee = 0
+
+
+def lire_derniere_rotation():
+    """Lit l'année de la dernière rotation annuelle effectuée (0 si jamais exécutée
+    depuis le dernier démarrage du bot)"""
+    return _derniere_rotation_annee
+
+
+def ecrire_derniere_rotation(annee):
+    """Enregistre en mémoire l'année de la rotation annuelle qui vient d'être effectuée"""
+    global _derniere_rotation_annee
+    _derniere_rotation_annee = annee
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 2 : FONCTION PRINCIPALE - ROTATION DES PROMOS
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+async def effectuer_rotation_annuelle():
+    """Fait avancer tous les membres d'une promotion et retire les rôles de
+    classe/spécialité devenus obsolètes. Appelée automatiquement début juillet."""
+    guild = bot.get_guild(GUILD_ID)
+    if guild is None:
+        print("❌ Rotation annuelle : serveur introuvable")
+        return
+
+    role_mmi1 = guild.get_role(ROLE_PROMOS[0][0])
+    role_mmi2 = guild.get_role(ROLE_PROMOS[1][0])
+    role_mmi3 = guild.get_role(ROLE_PROMOS[2][0])
+    role_ancien = guild.get_role(ROLE_PROMOS[3][0])
+
+    # Tous les rôles de classe/spécialité à nettoyer (les spés des Anciens sont
+    # volontairement conservées : elles représentent leur spécialité de fin d'études)
+    roles_classes_et_spes = (
+        [r[0] for r in ROLE_MMI1_CLASSES]
+        + [r[0] for r in ROLE_MMI2_CLASSES]
+        + [r[0] for r in ROLE_MMI2_SPES]
+        + [r[0] for r in ROLE_MMI3_SPES]
+    )
+
+    membres_deplaces = 0
+
+    for member in guild.members:
+        if member.bot:
+            continue
+
+        await remove_roles(member, roles_classes_et_spes)
+
+        if role_mmi1 in member.roles:
+            await member.remove_roles(role_mmi1)
+            await member.add_roles(role_mmi2)
+            membres_deplaces += 1
+        elif role_mmi2 in member.roles:
+            await member.remove_roles(role_mmi2)
+            await member.add_roles(role_mmi3)
+            membres_deplaces += 1
+        elif role_mmi3 in member.roles:
+            await member.remove_roles(role_mmi3)
+            await member.add_roles(role_ancien)
+            membres_deplaces += 1
+
+    print(f"✅ Rotation annuelle effectuée : {membres_deplaces} membre(s) déplacé(s) de promo")
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 2.5 : VIDAGE DES SALONS DE CLASSE (PROMO/TD/TP)
+# ──────────────────────────────────────────────────────────────────────────────────────
+#
+# Note : Discord ne permet la suppression "en masse" (rapide) que pour les messages de
+# moins de 14 jours. Pour les messages plus anciens, discord.py bascule automatiquement
+# sur une suppression message par message (beaucoup plus lente et soumise aux limites de
+# l'API). Sur des salons actifs depuis un an, le vidage complet peut donc prendre du
+# temps - c'est normal, il ne faut pas s'inquiéter si ça dure plusieurs minutes.
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+# Salons de classe (promo/TD/TP) à vider intégralement chaque début juillet
+CHANNELS_A_VIDER = [
+    1415235848118734900,
+    1460210497868795964,
+    1460210687963041814,
+    1460210913364934782,
+    1460211064464474257,
+    1460211141404917822,
+    1460211194106216541,
+    1460212958410834054,
+    1460211506229543063,
+    1460211641248387154,
+    1460212300236591165,
+    1459175254625620000,
+    1460630973212524760,
+    1460631121954869371,
+    1460631623489028177,
+    1460631718447808522,
+    1460631801302220862,
+    1460631861997863069,
+    1460631953811312765,
+    1460635160247799909,
+    1460635045856411901,
+    1460635533788053516,
+    1459175371340644495,
+    1460635975985270849,
+    1460636030054043941,
+    1460636081509892364,
+    1460636397676527697,
+    1460636483861086300,
+    1460636570028605665,
+    1460637078025928869
+]
+
+
+async def vider_salons_de_classe():
+    """Vide intégralement tous les salons de classe (promo/TD/TP) listés dans
+    CHANNELS_A_VIDER. Appelée automatiquement début juillet, en même temps que la
+    rotation annuelle des promos."""
+    total_supprime = 0
+
+    for channel_id in CHANNELS_A_VIDER:
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            print(f"❌ Salon introuvable pour le vidage : {channel_id}")
+            continue
+
+        try:
+            supprimes = await channel.purge(limit=None)
+            total_supprime += len(supprimes)
+        except discord.Forbidden:
+            print(f"❌ Permissions insuffisantes pour vider le salon {channel.name} ({channel_id})")
+        except Exception as e:
+            print(f"❌ Erreur lors du vidage du salon {channel_id} : {e}")
+
+    print(f"✅ Salons de classe vidés : {total_supprime} message(s) supprimé(s) au total")
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 3 : TÂCHE PLANIFIÉE - VÉRIFICATION QUOTIDIENNE
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+@tasks.loop(hours=24)
+async def verifier_rotation_annuelle():
+    """Vérifie une fois par jour si on est début juillet et si la rotation annuelle
+    n'a pas déjà été effectuée cette année ; si besoin, déclenche automatiquement la
+    rotation des promos ET le vidage des salons de classe"""
+    aujourdhui = datetime.date.today()
+
+    if aujourdhui.month == 7 and aujourdhui.day <= JOUR_LIMITE_ROTATION:
+        if lire_derniere_rotation() != aujourdhui.year:
+            await effectuer_rotation_annuelle()
+            await vider_salons_de_classe()
+            ecrire_derniere_rotation(aujourdhui.year)
+
+
+@verifier_rotation_annuelle.before_loop
+async def avant_verification_rotation():
+    """Attend que le bot soit complètement connecté avant de démarrer les vérifications"""
+    await bot.wait_until_ready()
 
 
 
