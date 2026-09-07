@@ -26,6 +26,7 @@ from email.message import EmailMessage
 import os
 from dotenv import load_dotenv
 import asyncio
+import datetime
 
 # Chargement des variables d'environnement (.env)
 load_dotenv()
@@ -253,14 +254,14 @@ class ReglementView(View):
 
 
 
-# ══════════════════════════════════════════════════════════════════════════════════════
-# ███████╗███████╗████████╗██╗   ██╗██████╗     ██████╗ ███████╗ ██████╗ ██╗     ███████╗
-# ██╔════╝██╔════╝╚══██╔══╝██║   ██║██╔══██╗    ██╔══██╗██╔════╝██╔════╝ ██║     ██╔════╝
-# ███████╗█████╗     ██║   ██║   ██║██████╔╝    ██████╔╝█████╗  ██║  ███╗██║     █████╗  
-# ╚════██║██╔══╝     ██║   ██║   ██║██╔═══╝     ██╔══██╗██╔══╝  ██║   ██║██║     ██╔══╝  
-# ███████║███████╗   ██║   ╚██████╔╝██║         ██║  ██║███████╗╚██████╔╝███████╗███████╗
-# ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝         ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚══════╝╚══════╝
-# ══════════════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+# ███████╗███████╗████████╗██╗   ██╗██████╗     ███████╗████████╗██╗   ██╗
+# ██╔════╝██╔════╝╚══██╔══╝██║   ██║██╔══██╗    ██╔════╝╚══██╔══╝██║   ██║
+# ███████╗█████╗     ██║   ██║   ██║██████╔╝    █████╗     ██║   ██║   ██║
+# ╚════██║██╔══╝     ██║   ██║   ██║██╔═══╝     ██╔══╝     ██║   ██║   ██║
+# ███████║███████╗   ██║   ╚██████╔╝██║         ███████╗   ██║   ╚██████╔╝
+# ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝         ╚══════╝   ╚═╝    ╚═════╝ 
+# ═══════════════════════════════════════════════════════════════════════
 #
 # FONCTIONNALITÉ 2 : VÉRIFICATION ÉTUDIANTE (RÔLE ÉTUDIANT)
 #
@@ -550,18 +551,47 @@ ROLE_ANCIEN_SPES = [
 # ──────────────────────────────────────────────────────────────────────────────────────
 # SECTION 1 : COMMANDE ADMIN (/setup_mmi) - PREMIÈRE ACTION
 # ──────────────────────────────────────────────────────────────────────────────────────
+#
+# Cette commande unique s'adapte automatiquement à la période de l'année :
+# - En juillet et en août (vacances d'été, cf. MOIS_VACANCES_MMI un peu plus bas) :
+#   affiche le menu léger "rentrée de septembre" (SummerMMIView), sans demande de
+#   classe/groupe précis puisque les étudiants ne le connaissent pas encore.
+# - Le reste de l'année (rentrée de septembre à fin d'année scolaire) :
+#   affiche le menu complet habituel (MMIMenu), avec classe/spécialité.
+#
+# Un futur BDE n'a donc besoin de retenir qu'UNE seule commande, /setup_mmi, quelle
+# que soit la période à laquelle il l'utilise. Si les mois de vacances changent un
+# jour, il suffit de modifier la liste MOIS_VACANCES_MMI.
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+# Mois pendant lesquels /setup_mmi bascule automatiquement en mode "vacances d'été"
+# 7 = juillet, 8 = août
+MOIS_VACANCES_MMI = [7, 8]
 
 @bot.tree.command(name="setup_mmi")
 @app_commands.checks.has_permissions(administrator=True)
 async def setup_mmi(interaction: discord.Interaction):
-    """Crée le menu de sélection MMI dans le salon configuré"""
+    """Crée le menu de sélection MMI dans le salon configuré.
+    Le menu affiché dépend automatiquement du mois en cours
+    (voir MOIS_VACANCES_MMI)."""
     channel = bot.get_channel(CHANNEL_MMI_ID)
-    role = interaction.guild.get_role(ROLE_MMI_ID)
-    await channel.send(
-        f"\n**Obtention des rôles {role.mention}**\n"
-        "Pour commencer, tu es en quelle année de BUT ?",
-        view=MMIMenu()
-    )
+    mois_actuel = datetime.date.today().month
+
+    if mois_actuel in MOIS_VACANCES_MMI:
+        # Mode vacances d'été : menu léger pour la rentrée de septembre
+        await channel.send(
+            "À la rentrée de septembre, dans quelle promotion seras-tu ?",
+            view=SummerMMIView()
+        )
+    else:
+        # Mode normal : menu complet promo + classe/spécialité
+        role = interaction.guild.get_role(ROLE_MMI_ID)
+        await channel.send(
+            f"\n**Obtention des rôles {role.mention}**\n"
+            "Pour commencer, tu es en quelle année de BUT ?",
+            view=MMIMenu()
+        )
+
     await interaction.response.send_message("✅  Menu MMI créé.", ephemeral=True)
 
 # ──────────────────────────────────────────────────────────────────────────────────────
@@ -633,7 +663,8 @@ class PromoSelect(Select):
             )
         elif promo == ROLE_PROMOS[2][0]:  # MMI3
             await interaction.response.send_message(
-                "✅  Promo sélectionnée.",
+                "✅  Promo sélectionnée. Maintenant choisis ta **spécialité**.",
+                view=SpeSelectView("mmi3"),
                 ephemeral=True
             )
 
@@ -767,11 +798,12 @@ class AncienSpeView(View):
         self.add_item(AncienSpeSelect())
 
 # ──────────────────────────────────────────────────────────────────────────────────────
-# SECTION 7 : COMMANDE VACANCES D'ÉTÉ (SÉLECTION POUR LA RENTRÉE DE SEPTEMBRE)
+# SECTION 7 : MODE VACANCES D'ÉTÉ (SÉLECTION POUR LA RENTRÉE DE SEPTEMBRE)
 # ──────────────────────────────────────────────────────────────────────────────────────
 #
-# Commande indépendante, utilisée uniquement pendant les vacances d'été.
-# Ne modifie ni ne remplace /setup_mmi : c'est un menu séparé, posté à part.
+# Ces vues sont utilisées automatiquement par /setup_mmi lorsque la commande est
+# exécutée pendant les mois listés dans MOIS_VACANCES_MMI (voir Section 1 plus haut).
+# Il n'y a plus de commande séparée : tout passe par /setup_mmi.
 #
 # Pendant l'été, les étudiants savent déjà dans quelle promotion ils seront à la
 # rentrée de septembre, mais ne connaissent pas encore leur futur groupe TD/TP.
@@ -836,17 +868,6 @@ class SummerMMIView(View):
         super().__init__(timeout=None)
         self.add_item(SummerPromoSelect())
 
-
-@bot.tree.command(name="setup_mmi_vac")
-@app_commands.checks.has_permissions(administrator=True)
-async def setup_mmi_vac(interaction: discord.Interaction):
-    """Crée le menu de sélection MMI spécifique aux vacances d'été"""
-    channel = bot.get_channel(CHANNEL_MMI_ID)
-    await channel.send(
-        "À la rentrée de septembre, dans quelle promotion seras-tu ?",
-        view=SummerMMIView()
-    )
-    await interaction.response.send_message("Menu MMI vacances créé.", ephemeral=True)
 
 
 
