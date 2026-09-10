@@ -71,6 +71,8 @@ class MyBot(commands.Bot):
         self.add_view(TicketMenuView())
         self.add_view(DemandeMenuView())
         self.add_view(MinecraftRoleView())
+        self.add_view(SquadraView())
+        self.add_view(SquadraAleatoireView())
 
         # Démarrage de la tâche planifiée qui vérifie chaque jour si la rotation
         # annuelle des promos (début juillet) doit être déclenchée
@@ -1853,6 +1855,299 @@ async def verifier_rotation_annuelle():
 async def avant_verification_rotation():
     """Attend que le bot soit complètement connecté avant de démarrer les vérifications"""
     await bot.wait_until_ready()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# ███████╗ ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗  █████╗ 
+# ██╔════╝██╔═══██╗██║   ██║██╔══██╗██╔══██╗██╔══██╗██╔══██╗
+# ███████╗██║   ██║██║   ██║███████║██║  ██║██████╔╝███████║
+# ╚════██║██║▄▄ ██║██║   ██║██╔══██║██║  ██║██╔══██╗██╔══██║
+# ███████║╚██████╔╝╚██████╔╝██║  ██║██████╔╝██║  ██║██║  ██║
+# ╚══════╝ ╚══▀▀═╝  ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# FONCTIONNALITÉ 9 : ÉQUIPES DE COULEUR (INTÉ)
+#
+# Concept :
+# Pour l'intégration, chaque étudiant MMI1/MMI2 est tiré au sort dans une équipe de
+# couleur en amphi (en physique, IRL). Deux commandes permettent de gérer ça en Discord.
+#
+# /setup_squadra : poste le menu de sélection dans le salon où la commande est tapée
+# (pas de salon fixe), pour pouvoir le poster séparément dans le salon des MMI1 pendant
+# leur CM d'annonce, puis plus tard dans celui des MMI2, sans que les MMI2 n'y aient
+# accès avant l'heure (et inversement).
+#
+# /setup_squadra_absents : poste un bouton qui attribue aléatoirement une équipe à tous
+# les MMI1/MMI2 n'en ayant pas encore (absents le jour du tirage, ou indécis), en
+# respectant les places encore disponibles par équipe et par niveau.
+#
+# Règles communes aux deux commandes :
+# - Réservé aux MMI1 et MMI2 (vérifié via leurs rôles de promo)
+# - Choix définitif : impossible de changer d'équipe soi-même une fois choisie, pour
+#   éviter de tricher sur le tirage au sort fait en physique
+# - Chaque équipe a un quota : 11 MMI1 et 8 MMI2, sauf la Squadra Verte qui n'a que
+#   7 MMI2 (voir CAPACITE_SQUADRA_MMI1 / CAPACITE_SQUADRA_MMI2_DEFAUT / EXCEPTIONS).
+#   Une fois le quota atteint pour un niveau donné, l'équipe n'est plus proposable à
+#   ce niveau (mais reste ouverte à l'autre niveau si son quota n'est pas encore atteint).
+#
+# Les noms des rôles ("Squadra Rouge", etc.) peuvent changer plus tard : le code se
+# base uniquement sur l'ID du rôle, jamais sur son nom affiché.
+#
+# ══════════════════════════════════════════════════════════════════════════════════════
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 0 : CONFIGURATION ET IDS
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+# Rôles d'équipe de couleur pour l'inté (nom affiché indicatif, seul l'ID compte)
+ROLE_SQUADRA = [
+    (1546395504357675078, "Noire"),
+    (1546191049041641522, "Rouge"),
+    (1546397998768980020, "Orange"),
+    (1546396082336956496, "Jaune"),
+    (1546397884193447947, "Verte"),
+    (1546395829546254386, "Bleue"),
+    (1546395985130033182, "Violette"),
+    (1546396136233762907, "Rose")
+]
+
+# Quota MMI1 : identique pour toutes les équipes
+CAPACITE_SQUADRA_MMI1 = 11
+
+# Quota MMI2 : 8 par défaut, sauf la Squadra Verte qui n'en compte que 7
+CAPACITE_SQUADRA_MMI2_DEFAUT = 8
+CAPACITE_SQUADRA_MMI2_EXCEPTIONS = {
+    1546397884193447947: 7,  # Squadra Verte
+}
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 1 : FONCTIONS UTILITAIRES - QUOTAS PAR ÉQUIPE
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+def capacite_squadra(role_squadra_id, promo):
+    """Retourne le quota d'une équipe pour un niveau donné ('mmi1' ou 'mmi2')"""
+    if promo == "mmi1":
+        return CAPACITE_SQUADRA_MMI1
+    return CAPACITE_SQUADRA_MMI2_EXCEPTIONS.get(role_squadra_id, CAPACITE_SQUADRA_MMI2_DEFAUT)
+
+
+def compter_membres_squadra(guild, role_squadra_id, role_niveau_id):
+    """Compte les membres ayant à la fois le rôle d'équipe et le rôle de niveau
+    (MMI1 ou MMI2) donnés"""
+    role_squadra = guild.get_role(role_squadra_id)
+    role_niveau = guild.get_role(role_niveau_id)
+    if role_squadra is None or role_niveau is None:
+        return 0
+    return sum(1 for m in guild.members if role_squadra in m.roles and role_niveau in m.roles)
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 2 : COMMANDE ADMIN (/setup_squadra) - PREMIÈRE ACTION
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="setup_squadra")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_squadra(interaction: discord.Interaction):
+    """Crée le menu de sélection d'équipe (inté) dans le salon où la commande est tapée.
+    Permet de poster ce menu séparément dans le salon des MMI1 puis, plus tard, dans
+    celui des MMI2, pour que chaque promo n'y ait accès qu'au bon moment (pendant leur
+    propre CM d'annonce)."""
+    await interaction.channel.send(
+        "**Équipes de l'intégration**\n\n"
+        "Tu as été tiré au sort dans une équipe en amphi ? Sélectionne-la ci-dessous.\n"
+        "⚠️  Ce choix est définitif : tu ne pourras plus le changer toi-même ensuite.\n\n"
+        "Réservé aux MMI1 et MMI2.",
+        view=SquadraView()
+    )
+    await interaction.response.send_message("✅  Menu des équipes envoyé dans ce salon.", ephemeral=True)
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 3 : VIEW - SÉLECTION DE L'ÉQUIPE
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+class SquadraSelect(Select):
+    def __init__(self):
+        super().__init__(
+            placeholder="Choisis ton équipe (celle tirée en amphi)",
+            options=[discord.SelectOption(label=f"Squadra {n}", value=str(i)) for i, n in ROLE_SQUADRA],
+            custom_id="squadra_select"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        # ⚠️ NE PAS SUPPRIMER CE MESSAGE
+        # Ce select correspond au message racine partagé par tout le monde, comme le
+        # PromoSelect de /setup_mmi : il doit rester visible en permanence.
+
+        member = interaction.user
+        guild = interaction.guild
+
+        role_mmi1 = guild.get_role(ROLE_PROMOS[0][0])
+        role_mmi2 = guild.get_role(ROLE_PROMOS[1][0])
+
+        # Vérification : réservé aux MMI1 et MMI2
+        if role_mmi1 in member.roles:
+            promo = "mmi1"
+            role_niveau = role_mmi1
+        elif role_mmi2 in member.roles:
+            promo = "mmi2"
+            role_niveau = role_mmi2
+        else:
+            await interaction.response.send_message(
+                "❌  Cette sélection est réservée aux MMI1 et MMI2. "
+                "Choisis d'abord ta promo via /setup_mmi.",
+                ephemeral=True
+            )
+            return
+
+        # Choix définitif : impossible de changer d'équipe une fois qu'elle est attribuée
+        roles_squadra_existants = [guild.get_role(r[0]) for r in ROLE_SQUADRA]
+        if any(r in member.roles for r in roles_squadra_existants if r is not None):
+            await interaction.response.send_message(
+                "❌  Tu as déjà une équipe, impossible d'en changer toi-même.",
+                ephemeral=True
+            )
+            return
+
+        role_squadra_id = int(self.values[0])
+        role_squadra = guild.get_role(role_squadra_id)
+
+        # Vérification du quota restant pour cette équipe, à ce niveau
+        quota = capacite_squadra(role_squadra_id, promo)
+        deja_present = compter_membres_squadra(guild, role_squadra_id, role_niveau.id)
+
+        if deja_present >= quota:
+            await interaction.response.send_message(
+                f"❌  Cette équipe est déjà complète pour les "
+                f"{'MMI1' if promo == 'mmi1' else 'MMI2'}. Choisis-en une autre.",
+                ephemeral=True
+            )
+            return
+
+        await member.add_roles(role_squadra)
+        await interaction.response.send_message(
+            f"✅  Équipe **{role_squadra.name}** attribuée. C'est définitif, tu ne pourras plus en changer toi-même.",
+            ephemeral=True
+        )
+
+
+class SquadraView(View):
+    """View principale contenant le sélecteur d'équipe (message unique, partagé par tous)"""
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(SquadraSelect())
+
+# ──────────────────────────────────────────────────────────────────────────────────────
+# SECTION 4 : COMMANDE ADMIN (/setup_squadra_absents) - ATTRIBUTION ALÉATOIRE
+# ──────────────────────────────────────────────────────────────────────────────────────
+#
+# Pour les MMI1/MMI2 absents le jour du tirage au sort en amphi (ou qui n'ont
+# simplement pas encore fait leur choix), cette commande poste un bouton permettant
+# d'attribuer automatiquement une équipe à tous ceux qui n'en ont pas encore, en
+# respectant les places encore disponibles dans chaque équipe (voir capacite_squadra
+# et compter_membres_squadra définies plus haut).
+#
+# L'attribution est aléatoire mais contrainte : elle ne peut jamais faire dépasser le
+# quota d'une équipe pour un niveau donné. S'il n'y a plus assez de places pour tout le
+# monde (plus d'absents que de places libres), les membres restants ne reçoivent rien
+# et sont signalés dans le message de résultat.
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="setup_squadra_absents")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_squadra_absents(interaction: discord.Interaction):
+    """Poste, dans le salon où la commande est tapée, un bouton pour attribuer
+    aléatoirement une équipe aux MMI1/MMI2 qui n'en ont pas encore"""
+    await interaction.channel.send(
+        "**Attribution aléatoire des équipes restantes**\n\n"
+        "Ce bouton attribue automatiquement une équipe aux MMI1 et MMI2 qui n'en ont "
+        "pas encore, en respectant les places encore disponibles dans chaque équipe.",
+        view=SquadraAleatoireView()
+    )
+    await interaction.response.send_message("✅  Message d'attribution aléatoire envoyé.", ephemeral=True)
+
+
+class SquadraAleatoireView(View):
+    """View avec le bouton d'attribution aléatoire des équipes restantes"""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Attribuer les équipes aux absents",
+        style=discord.ButtonStyle.primary,
+        emoji="🎲",
+        custom_id="squadra_attribution_alea"
+    )
+    async def attribuer(self, interaction: discord.Interaction, button: Button):
+        """Tire au sort une équipe pour chaque MMI1/MMI2 n'en ayant pas encore,
+        en respectant les places restantes par équipe et par niveau"""
+        # Double sécurité : seul un admin peut déclencher l'attribution, même si le
+        # bouton reste visible pour tout le monde une fois posté
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌  Seuls les administrateurs peuvent utiliser ce bouton.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        guild = interaction.guild
+        role_mmi1 = guild.get_role(ROLE_PROMOS[0][0])
+        role_mmi2 = guild.get_role(ROLE_PROMOS[1][0])
+        roles_squadra_existants = [guild.get_role(r[0]) for r in ROLE_SQUADRA]
+
+        resultats = []
+
+        for promo, role_niveau, libelle_niveau in [
+            ("mmi1", role_mmi1, "MMI1"),
+            ("mmi2", role_mmi2, "MMI2"),
+        ]:
+            # Construction du "sac" des places encore libres : une entrée par place
+            sac_places = []
+            for role_squadra_id, _ in ROLE_SQUADRA:
+                quota = capacite_squadra(role_squadra_id, promo)
+                deja_present = compter_membres_squadra(guild, role_squadra_id, role_niveau.id)
+                sac_places.extend([role_squadra_id] * max(0, quota - deja_present))
+
+            random.shuffle(sac_places)
+
+            # Membres de ce niveau n'ayant encore aucune équipe
+            absents = [
+                m for m in guild.members
+                if role_niveau in m.roles
+                and not any(r in m.roles for r in roles_squadra_existants if r is not None)
+            ]
+            random.shuffle(absents)
+
+            nb_attribues = 0
+            for membre in absents:
+                if not sac_places:
+                    break
+                role_squadra = guild.get_role(sac_places.pop())
+                await membre.add_roles(role_squadra)
+                nb_attribues += 1
+
+            nb_restants = len(absents) - nb_attribues
+            resultats.append(f"{libelle_niveau} : {nb_attribues} équipe(s) attribuée(s), {nb_restants} en attente (plus de place libre)")
+
+        await interaction.followup.send(
+            "✅  Attribution terminée.\n" + "\n".join(resultats),
+            ephemeral=True
+        )
 
 
 
